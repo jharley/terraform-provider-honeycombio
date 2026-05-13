@@ -128,6 +128,37 @@ jobs:
           paths: "*-report.xml"
           show: "fail"
 
+  test-ephemeral-us:
+    name: Test Ephemeral US
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: hnytf-testacc-ephemeral-us
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Run ephemeral resource acceptance tests
+        env:
+          HONEYCOMB_KEY_ID: ${{ secrets.HONEYCOMB_KEY_ID }}
+          HONEYCOMB_KEY_SECRET: ${{ secrets.HONEYCOMB_KEY_SECRET }}
+          TF_ACC: 1
+        run: |
+          go test -v ./internal/provider/... \
+            -run TestAcc_APIKeyEphemeralResource \
+            -timeout=10m
+
   test-eu:
     name: Test EU
     needs: build
@@ -222,3 +253,35 @@ jobs:
         with:
           paths: "*-report.xml"
           show: "fail"
+
+  test-ephemeral-eu:
+    name: Test Ephemeral EU
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: hnytf-testacc-ephemeral-eu
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: "go.mod"
+          cache: true
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+
+      - name: Run ephemeral resource acceptance tests
+        env:
+          HONEYCOMB_API_ENDPOINT: https://api.eu1.honeycomb.io
+          HONEYCOMB_KEY_ID: ${{ secrets.HONEYCOMB_KEY_ID_EU }}
+          HONEYCOMB_KEY_SECRET: ${{ secrets.HONEYCOMB_KEY_SECRET_EU }}
+          TF_ACC: 1
+        run: |
+          go test -v ./internal/provider/... \
+            -run TestAcc_APIKeyEphemeralResource \
+            -timeout=10m

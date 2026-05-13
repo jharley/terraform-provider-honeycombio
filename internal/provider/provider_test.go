@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"regexp"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tfprotov5"
 	"github.com/hashicorp/terraform-plugin-mux/tf5muxserver"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/tfversion"
 	"github.com/joho/godotenv"
 	"github.com/stretchr/testify/require"
 
@@ -214,6 +216,51 @@ data "honeycombio_environments" "all" {}
 					Config:      `data "honeycombio_datasets" "all" {}`,
 					PlanOnly:    true,
 					ExpectError: regexp.MustCompile(`requires at least one of a Honeycomb API Key`),
+				},
+			},
+		})
+	})
+
+	t.Run("defers when provider config contains unknown values", func(t *testing.T) {
+		t.Skip("requires Terraform deferral support which is currently experimental/dev-only")
+
+		ctx := context.Background()
+		c := testAccV2Client(t)
+		env := testAccEnvironment(ctx, t, c)
+
+		resource.Test(t, resource.TestCase{
+			TerraformVersionChecks: []tfversion.TerraformVersionCheck{
+				tfversion.SkipBelow(tfversion.Version1_10_0),
+			},
+			PreCheck:                 testAccPreCheckV2API(t),
+			ProtoV5ProviderFactories: testAccProtoV5MuxServerFactory,
+			AdditionalCLIOptions: &resource.AdditionalCLIOptions{
+				Plan:  resource.PlanOptions{AllowDeferral: true},
+				Apply: resource.ApplyOptions{AllowDeferral: true},
+			},
+			Steps: []resource.TestStep{
+				{
+					Config: fmt.Sprintf(`
+ephemeral "honeycombio_api_key" "test" {
+  name = "test deferred provider config"
+  type = "configuration"
+
+  environment_id = "%s"
+
+  permissions {
+    create_datasets = true
+  }
+}
+
+provider "honeycombio" {
+  alias   = "ephemeral"
+  api_key = ephemeral.honeycombio_api_key.test.key
+}
+
+resource "honeycombio_marker" "test" {
+  provider = honeycombio.ephemeral
+  message  = "hello, world!"
+}`, env.ID),
 				},
 			},
 		})

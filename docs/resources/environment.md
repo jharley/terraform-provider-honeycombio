@@ -22,7 +22,7 @@ resource "honeycombio_environment" "uat" {
 
 ### Optional
 
-- `color` (String) The color of the Environment. If one is not provided, a random color will be assigned.
+- `color` (String) The color of the Environment. If one is not provided, a random color will be assigned. Valid values are `blue`, `green`, `gold`, `red`, `purple`, `lightBlue`, `lightGreen`, `lightGold`, `lightRed`, and `lightPurple`.
 - `delete_protected` (Boolean) The current delete protection status of the Environment. Cannot be set to false on creation.
 - `description` (String) The Environment's description.
 

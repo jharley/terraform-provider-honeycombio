@@ -95,9 +95,10 @@ func (*environmentResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 				},
 			},
 			"color": schema.StringAttribute{
-				Description: "The color of the Environment. If one is not provided, a random color will be assigned.",
-				Computed:    true,
-				Optional:    true,
+				Description:         "The color of the Environment. If one is not provided, a random color will be assigned. Valid values are: blue, green, gold, red, purple, lightBlue, lightGreen, lightGold, lightRed, lightPurple.",
+				MarkdownDescription: "The color of the Environment. If one is not provided, a random color will be assigned. Valid values are `blue`, `green`, `gold`, `red`, `purple`, `lightBlue`, `lightGreen`, `lightGold`, `lightRed`, and `lightPurple`.",
+				Computed:            true,
+				Optional:            true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},

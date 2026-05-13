@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
@@ -111,6 +112,12 @@ func (p *HoneycombioProvider) DataSources(ctx context.Context) []func() datasour
 	}
 }
 
+func (p *HoneycombioProvider) EphemeralResources(_ context.Context) []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{
+		NewAPIKeyEphemeralResource,
+	}
+}
+
 func (p *HoneycombioProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
 	resp.TypeName = "honeycombio"
 	resp.Version = p.version
@@ -123,31 +130,37 @@ func (p *HoneycombioProvider) Configure(ctx context.Context, req provider.Config
 		return
 	}
 
-	if config.APIKey.IsUnknown() {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("api_key"),
-			"Unknown Honeycomb API Key",
-			"The provider cannot create the Honeycomb client as there is an unknown configuration value for the Honeycomb API Key. "+
-				"Either target apply the source of the value first, set the value statically in the configuration, or use the HONEYCOMB_API_KEY environment variable.",
-		)
-	}
-	if config.KeyID.IsUnknown() {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("api_key_id"),
-			"Unknown Honeycomb API Key ID",
-			"The provider cannot create the Honeycomb client as there is an unknown configuration value for the Honeycomb API Key ID. "+
-				"Either target apply the source of the value first, set the value statically in the configuration, or use the HONEYCOMB_KEY_ID environment variable.",
-		)
-	}
-	if config.KeySecret.IsUnknown() {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("api_key_secret"),
-			"Unknown Honeycomb API Key Secret",
-			"The provider cannot create the Honeycomb client as there is an unknown configuration value for the Honeycomb API Key Secret. "+
-				"Either target apply the source of the value first, set the value statically in the configuration, or use the HONEYCOMB_KEY_SECRET environment variable.",
-		)
-	}
-	if resp.Diagnostics.HasError() {
+	// When provider configuration contains unknown values (e.g. from an ephemeral
+	// resource that hasn't been opened yet), defer provider configuration until apply.
+	if config.APIKey.IsUnknown() || config.KeyID.IsUnknown() || config.KeySecret.IsUnknown() {
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &provider.Deferred{Reason: provider.DeferredReasonProviderConfigUnknown}
+			return
+		}
+		if config.APIKey.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("api_key"),
+				"Unknown Honeycomb API Key",
+				"The provider cannot create the Honeycomb client as there is an unknown configuration value for the Honeycomb API Key. "+
+					"Either target apply the source of the value first, set the value statically in the configuration, or use the HONEYCOMB_API_KEY environment variable.",
+			)
+		}
+		if config.KeyID.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("api_key_id"),
+				"Unknown Honeycomb API Key ID",
+				"The provider cannot create the Honeycomb client as there is an unknown configuration value for the Honeycomb API Key ID. "+
+					"Either target apply the source of the value first, set the value statically in the configuration, or use the HONEYCOMB_KEY_ID environment variable.",
+			)
+		}
+		if config.KeySecret.IsUnknown() {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("api_key_secret"),
+				"Unknown Honeycomb API Key Secret",
+				"The provider cannot create the Honeycomb client as there is an unknown configuration value for the Honeycomb API Key Secret. "+
+					"Either target apply the source of the value first, set the value statically in the configuration, or use the HONEYCOMB_KEY_SECRET environment variable.",
+			)
+		}
 		return
 	}
 
@@ -247,6 +260,7 @@ func (p *HoneycombioProvider) Configure(ctx context.Context, req provider.Config
 
 	resp.DataSourceData = cc
 	resp.ResourceData = cc
+	resp.EphemeralResourceData = cc
 }
 
 // ConfiguredClient is a wrapper around the configured Honeycomb API clients.
@@ -299,6 +313,16 @@ func getClientFromDatasourceRequest(req *datasource.ConfigureRequest) *Configure
 }
 
 func getClientFromResourceRequest(req *resource.ConfigureRequest) *ConfiguredClient {
+	if req.ProviderData != nil {
+		if c, ok := req.ProviderData.(*ConfiguredClient); ok {
+			return c
+		}
+	}
+	// ProviderData hasn't been initialized yet -- so fail gracefully
+	return nil
+}
+
+func getClientFromEphemeralResourceRequest(req *ephemeral.ConfigureRequest) *ConfiguredClient {
 	if req.ProviderData != nil {
 		if c, ok := req.ProviderData.(*ConfiguredClient); ok {
 			return c

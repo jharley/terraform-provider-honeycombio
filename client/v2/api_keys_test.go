@@ -16,63 +16,156 @@ import (
 )
 
 func TestClient_APIKeys(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	c := newTestClient(t)
 	env := newTestEnvironment(ctx, t, c)
 
-	// create a new key
-	keyName := test.RandomStringWithPrefix("test.", 10)
-	k, err := c.APIKeys.Create(ctx, &APIKey{
-		Name:    helper.ToPtr(keyName),
-		KeyType: "ingest",
-		Environment: &Environment{
-			ID: env.ID,
-		},
-		Permissions: &APIKeyPermissions{
-			CreateDatasets: true,
-		},
+	t.Run("ingest key", func(t *testing.T) {
+		// create a new key
+		keyName := test.RandomStringWithPrefix("test.", 10)
+		k, err := c.APIKeys.Create(ctx, &APIKey{
+			Name:    helper.ToPtr(keyName),
+			KeyType: APIKeyTypeIngest,
+			Environment: &Environment{
+				ID: env.ID,
+			},
+			Permissions: &APIKeyPermissions{
+				CreateDatasets: true,
+			},
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, k.ID)
+		assert.NotEmpty(t, k.Secret)
+		assert.Equal(t, keyName, *k.Name)
+		assert.False(t, *k.Disabled)
+		assert.True(t, k.Permissions.CreateDatasets)
+
+		// read the key back and compare
+		key, err := c.APIKeys.Get(ctx, k.ID)
+		require.NoError(t, err)
+		assert.Equal(t, k.ID, key.ID)
+		assert.Equal(t, k.Name, key.Name)
+		assert.Equal(t, k.KeyType, key.KeyType)
+		assert.Equal(t, k.Disabled, key.Disabled)
+		assert.Equal(t, k.Environment.ID, key.Environment.ID)
+		assert.Equal(t, k.Permissions.CreateDatasets, key.Permissions.CreateDatasets)
+		assert.WithinDuration(t, k.Timestamps.CreatedAt, key.Timestamps.CreatedAt, 5*time.Second)
+		assert.WithinDuration(t, k.Timestamps.UpdatedAt, key.Timestamps.UpdatedAt, 5*time.Second)
+
+		// update the key's name and disable it
+		keyName = test.RandomStringWithPrefix("test.", 10)
+		key, err = c.APIKeys.Update(ctx, &APIKey{
+			ID:       k.ID,
+			Name:     helper.ToPtr(keyName),
+			Disabled: helper.ToPtr(true),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, k.ID, key.ID)
+		assert.Equal(t, keyName, *key.Name)
+		assert.True(t, *key.Disabled)
+		assert.WithinDuration(t, time.Now(), key.Timestamps.UpdatedAt, 5*time.Second)
+
+		// delete the key
+		err = c.APIKeys.Delete(ctx, k.ID)
+		require.NoError(t, err)
+
+		// verify that the key was deleted
+		_, err = c.APIKeys.Get(ctx, k.ID)
+		var de hnyclient.DetailedError
+		require.ErrorAs(t, err, &de)
+		assert.True(t, de.IsNotFound())
 	})
-	require.NoError(t, err)
-	assert.NotEmpty(t, k.ID)
-	assert.NotEmpty(t, k.Secret)
-	assert.Equal(t, keyName, *k.Name)
-	assert.False(t, *k.Disabled)
-	assert.True(t, k.Permissions.CreateDatasets)
 
-	// read the key back and compare
-	key, err := c.APIKeys.Get(ctx, k.ID)
-	require.NoError(t, err)
-	assert.Equal(t, k.ID, key.ID)
-	assert.Equal(t, k.Name, key.Name)
-	assert.Equal(t, k.KeyType, key.KeyType)
-	assert.Equal(t, k.Disabled, key.Disabled)
-	assert.Equal(t, k.Environment.ID, key.Environment.ID)
-	assert.Equal(t, k.Permissions.CreateDatasets, key.Permissions.CreateDatasets)
-	assert.WithinDuration(t, k.Timestamps.CreatedAt, key.Timestamps.CreatedAt, 5*time.Second)
-	assert.WithinDuration(t, k.Timestamps.UpdatedAt, key.Timestamps.UpdatedAt, 5*time.Second)
+	t.Run("configuration key", func(t *testing.T) {
+		// create a new key
+		keyName := test.RandomStringWithPrefix("test.", 10)
+		k, err := c.APIKeys.Create(ctx, &APIKey{
+			Name:    helper.ToPtr(keyName),
+			KeyType: APIKeyTypeConfiguration,
+			Environment: &Environment{
+				ID: env.ID,
+			},
+			Permissions: &APIKeyPermissions{
+				CreateDatasets: true,
+				ManageBoards:   helper.ToPtr(true),
+				ManageTriggers: helper.ToPtr(true),
+			},
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, k.ID)
+		assert.NotEmpty(t, k.Secret)
+		assert.Equal(t, keyName, *k.Name)
+		assert.False(t, *k.Disabled)
+		assert.True(t, k.Permissions.CreateDatasets)
+		assert.True(t, *k.Permissions.ManageBoards)
+		assert.True(t, *k.Permissions.ManageTriggers)
+		assert.False(t, *k.Permissions.ManageColumns)
+		assert.False(t, *k.Permissions.ManageMarkers)
+		assert.False(t, *k.Permissions.ManageSLOs)
+		assert.False(t, *k.Permissions.ManageRecipients)
+		assert.False(t, *k.Permissions.ReadServiceMaps)
+		assert.False(t, *k.Permissions.RunQueries)
+		assert.False(t, *k.Permissions.SendEvents)
+		assert.False(t, *k.Permissions.VisibleTeamMembers)
 
-	// update the key's name and disable it
-	keyName = test.RandomStringWithPrefix("test.", 10)
-	key, err = c.APIKeys.Update(ctx, &APIKey{
-		ID:       k.ID,
-		Name:     helper.ToPtr(keyName),
-		Disabled: helper.ToPtr(true),
+		// read the key back and compare
+		key, err := c.APIKeys.Get(ctx, k.ID)
+		require.NoError(t, err)
+		assert.Equal(t, k.ID, key.ID)
+		assert.Equal(t, k.Name, key.Name)
+		assert.Equal(t, k.KeyType, key.KeyType)
+		assert.Equal(t, k.Disabled, key.Disabled)
+		assert.Equal(t, k.Environment.ID, key.Environment.ID)
+		assert.True(t, k.Permissions.CreateDatasets)
+		assert.True(t, *k.Permissions.ManageBoards)
+		assert.True(t, *k.Permissions.ManageTriggers)
+		assert.False(t, *k.Permissions.ManageColumns)
+		assert.False(t, *k.Permissions.ManageMarkers)
+		assert.False(t, *k.Permissions.ManageSLOs)
+		assert.False(t, *k.Permissions.ManageRecipients)
+		assert.False(t, *k.Permissions.ReadServiceMaps)
+		assert.False(t, *k.Permissions.RunQueries)
+		assert.False(t, *k.Permissions.SendEvents)
+		assert.False(t, *k.Permissions.VisibleTeamMembers)
+		assert.WithinDuration(t, k.Timestamps.CreatedAt, key.Timestamps.CreatedAt, 5*time.Second)
+		assert.WithinDuration(t, k.Timestamps.UpdatedAt, key.Timestamps.UpdatedAt, 5*time.Second)
+
+		// configuration key permissions are not immutable -- let's switch some things around
+		key.Permissions.CreateDatasets = false
+		key.Permissions.ManageMarkers = helper.ToPtr(true)
+		key.Permissions.VisibleTeamMembers = helper.ToPtr(true)
+		key, err = c.APIKeys.Update(ctx, key)
+		require.NoError(t, err)
+		assert.Equal(t, k.ID, key.ID)
+		assert.False(t, key.Permissions.CreateDatasets)
+		assert.True(t, *key.Permissions.ManageMarkers)
+		assert.True(t, *key.Permissions.VisibleTeamMembers)
+
+		// update the key's name and disable it
+		keyName = test.RandomStringWithPrefix("test.", 10)
+		key, err = c.APIKeys.Update(ctx, &APIKey{
+			ID:       k.ID,
+			Name:     helper.ToPtr(keyName),
+			Disabled: helper.ToPtr(true),
+		})
+		require.NoError(t, err)
+		assert.Equal(t, k.ID, key.ID)
+		assert.Equal(t, keyName, *key.Name)
+		assert.True(t, *key.Disabled)
+		assert.WithinDuration(t, time.Now(), key.Timestamps.UpdatedAt, 5*time.Second)
+
+		// delete the key
+		err = c.APIKeys.Delete(ctx, k.ID)
+		require.NoError(t, err)
+
+		// verify that the key was deleted
+		_, err = c.APIKeys.Get(ctx, k.ID)
+		var de hnyclient.DetailedError
+		require.ErrorAs(t, err, &de)
+		assert.True(t, de.IsNotFound())
 	})
-	require.NoError(t, err)
-	assert.Equal(t, k.ID, key.ID)
-	assert.Equal(t, keyName, *key.Name)
-	assert.True(t, *key.Disabled)
-	assert.WithinDuration(t, time.Now(), key.Timestamps.UpdatedAt, 5*time.Second)
-
-	// delete the key
-	err = c.APIKeys.Delete(ctx, k.ID)
-	require.NoError(t, err)
-
-	// verify that the key was deleted
-	_, err = c.APIKeys.Get(ctx, k.ID)
-	var de hnyclient.DetailedError
-	require.ErrorAs(t, err, &de)
-	assert.True(t, de.IsNotFound())
 }
 
 func TestClient_APIKeys_Pagination(t *testing.T) {
@@ -86,7 +179,7 @@ func TestClient_APIKeys_Pagination(t *testing.T) {
 	for i := range numKeys {
 		k, err := c.APIKeys.Create(ctx, &APIKey{
 			Name:    helper.ToPtr(fmt.Sprintf("test.%d", i)),
-			KeyType: "ingest",
+			KeyType: APIKeyTypeIngest,
 			Environment: &Environment{
 				ID: env.ID,
 			},

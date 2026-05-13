@@ -8,10 +8,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -21,6 +21,7 @@ import (
 	"github.com/honeycombio/terraform-provider-honeycombio/client"
 	v2client "github.com/honeycombio/terraform-provider-honeycombio/client/v2"
 	"github.com/honeycombio/terraform-provider-honeycombio/internal/helper"
+	"github.com/honeycombio/terraform-provider-honeycombio/internal/helper/validation"
 	"github.com/honeycombio/terraform-provider-honeycombio/internal/models"
 )
 
@@ -82,9 +83,12 @@ func (*apiKeyResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"type": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "The type of API key. Currently only `ingest` is supported.",
+				MarkdownDescription: "The type of API key.",
 				Validators: []validator.String{
-					stringvalidator.OneOf("ingest"),
+					stringvalidator.OneOf(
+						v2client.APIKeyTypeConfiguration,
+						v2client.APIKeyTypeIngest,
+					),
 				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -123,9 +127,14 @@ func (*apiKeyResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				MarkdownDescription: "A configuration block setting what actions the API key can perform.",
 				Validators: []validator.List{
 					listvalidator.SizeAtMost(1),
+					validation.APIKeyConfigKeyOnlyPermissions(),
 				},
 				PlanModifiers: []planmodifier.List{
-					listplanmodifier.RequiresReplace(),
+					listplanmodifier.RequiresReplaceIf(func(ctx context.Context, req planmodifier.ListRequest, resp *listplanmodifier.RequiresReplaceIfFuncResponse) {
+						var keyType types.String
+						resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("type"), &keyType)...)
+						resp.RequiresReplace = keyType.ValueString() == v2client.APIKeyTypeIngest
+					}, "Requires replacement when permissions change on ingest API keys.", "Requires replacement when permissions change on ingest API keys."),
 				},
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
@@ -134,9 +143,56 @@ func (*apiKeyResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 							Computed:            true,
 							Default:             booldefault.StaticBool(false),
 							MarkdownDescription: "Allow this key to create missing datasets when sending telemetry. Defaults to `false`.",
-							PlanModifiers: []planmodifier.Bool{
-								boolplanmodifier.RequiresReplace(),
-							},
+						},
+						"manage_boards": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to manage boards. Only valid for `configuration` keys.",
+						},
+						"manage_columns": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to manage columns. Only valid for `configuration` keys.",
+						},
+						"manage_markers": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to manage markers. Only valid for `configuration` keys.",
+						},
+						"manage_recipients": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to manage recipients. Only valid for `configuration` keys.",
+						},
+						"manage_slos": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to manage SLOs. Only valid for `configuration` keys.",
+						},
+						"manage_triggers": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to manage triggers. Only valid for `configuration` keys.",
+						},
+						"read_service_maps": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to read service maps. Only valid for `configuration` keys.",
+						},
+						"run_queries": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to run queries. Only valid for `configuration` keys.",
+						},
+						"send_events": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to send events. Only valid for `configuration` keys.",
+						},
+						"visible_team_members": schema.BoolAttribute{
+							Optional:            true,
+							Computed:            true,
+							MarkdownDescription: "Allow this key to view team members. Only valid for `configuration` keys.",
 						},
 					},
 				},
@@ -157,7 +213,7 @@ func (r *apiKeyResource) Create(ctx context.Context, req resource.CreateRequest,
 		KeyType:     plan.Type.ValueString(),
 		Environment: &v2client.Environment{ID: plan.EnvironmentID.ValueString()},
 		Disabled:    plan.Disabled.ValueBoolPointer(),
-		Permissions: expandAPIKeyPermissions(ctx, plan.Permissions, &resp.Diagnostics),
+		Permissions: expandAPIKeyPermissions(ctx, plan.Type.ValueString(), plan.Permissions, &resp.Diagnostics),
 	}
 
 	key, err := r.client.APIKeys.Create(ctx, newKey)
@@ -174,18 +230,20 @@ func (r *apiKeyResource) Create(ctx context.Context, req resource.CreateRequest,
 	state.Secret = types.StringValue(key.Secret)
 
 	if !plan.Permissions.IsNull() {
-		state.Permissions = flattenAPIKeyPermissions(ctx, key.Permissions, &resp.Diagnostics)
+		state.Permissions = flattenAPIKeyPermissions(ctx, key.KeyType, key.Permissions, &resp.Diagnostics)
 	} else {
 		state.Permissions = types.ListNull(types.ObjectType{AttrTypes: models.APIKeyPermissionsAttrType})
 	}
 
 	switch key.KeyType {
-	case "ingest":
+	case v2client.APIKeyTypeConfiguration:
+		state.Key = types.StringValue(key.Secret)
+	case v2client.APIKeyTypeIngest:
 		state.Key = types.StringValue(key.ID + key.Secret)
 	default:
 		resp.Diagnostics.AddError(
 			"Unknown API Key Type",
-			"API Key Type "+key.KeyType+" is not supported. Supported types are: ingest",
+			"API Key Type "+key.KeyType+" is not supported. Supported types are: ingest, configuration",
 		)
 	}
 
@@ -229,7 +287,7 @@ func (r *apiKeyResource) Read(ctx context.Context, req resource.ReadRequest, res
 	state.EnvironmentID = types.StringValue(key.Environment.ID)
 
 	if !state.Permissions.IsNull() {
-		state.Permissions = flattenAPIKeyPermissions(ctx, key.Permissions, &resp.Diagnostics)
+		state.Permissions = flattenAPIKeyPermissions(ctx, key.KeyType, key.Permissions, &resp.Diagnostics)
 	} else {
 		state.Permissions = types.ListNull(types.ObjectType{AttrTypes: models.APIKeyPermissionsAttrType})
 	}
@@ -251,6 +309,13 @@ func (r *apiKeyResource) Update(ctx context.Context, req resource.UpdateRequest,
 		Disabled: plan.Disabled.ValueBoolPointer(),
 	}
 
+	if plan.Type.ValueString() == v2client.APIKeyTypeConfiguration {
+		updateRequest.Permissions = expandAPIKeyPermissions(ctx, plan.Type.ValueString(), plan.Permissions, &resp.Diagnostics)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
 	_, err := r.client.APIKeys.Update(ctx, updateRequest)
 	if helper.AddDiagnosticOnError(&resp.Diagnostics, "Updating Honeycomb API Key", err) {
 		return
@@ -267,7 +332,7 @@ func (r *apiKeyResource) Update(ctx context.Context, req resource.UpdateRequest,
 	state.Disabled = types.BoolValue(*key.Disabled)
 	state.EnvironmentID = types.StringValue(key.Environment.ID)
 	if !state.Permissions.IsNull() {
-		state.Permissions = flattenAPIKeyPermissions(ctx, key.Permissions, &resp.Diagnostics)
+		state.Permissions = flattenAPIKeyPermissions(ctx, key.KeyType, key.Permissions, &resp.Diagnostics)
 	} else {
 		state.Permissions = types.ListNull(types.ObjectType{AttrTypes: models.APIKeyPermissionsAttrType})
 	}
@@ -302,7 +367,7 @@ func (r *apiKeyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	}
 }
 
-func expandAPIKeyPermissions(ctx context.Context, list types.List, diags *diag.Diagnostics) *v2client.APIKeyPermissions {
+func expandAPIKeyPermissions(ctx context.Context, keyType string, list types.List, diags *diag.Diagnostics) *v2client.APIKeyPermissions {
 	var permissions []models.APIKeyPermissionModel
 	diags.Append(list.ElementsAs(ctx, &permissions, false)...)
 	if diags.HasError() {
@@ -313,18 +378,53 @@ func expandAPIKeyPermissions(ctx context.Context, list types.List, diags *diag.D
 		return nil
 	}
 
-	return &v2client.APIKeyPermissions{
-		CreateDatasets: permissions[0].CreateDatasets.ValueBool(),
+	p := permissions[0]
+	perms := &v2client.APIKeyPermissions{
+		CreateDatasets: p.CreateDatasets.ValueBool(),
 	}
+
+	// Configuration-key-only permissions must not be sent for ingest keys:
+	// the API rejects the request even when all values are false.
+	if keyType == v2client.APIKeyTypeConfiguration {
+		perms.ManageBoards = p.ManageBoards.ValueBoolPointer()
+		perms.ManageColumns = p.ManageColumns.ValueBoolPointer()
+		perms.ManageMarkers = p.ManageMarkers.ValueBoolPointer()
+		perms.ManageRecipients = p.ManageRecipients.ValueBoolPointer()
+		perms.ManageSLOs = p.ManageSLOs.ValueBoolPointer()
+		perms.ManageTriggers = p.ManageTriggers.ValueBoolPointer()
+		perms.ReadServiceMaps = p.ReadServiceMaps.ValueBoolPointer()
+		perms.RunQueries = p.RunQueries.ValueBoolPointer()
+		perms.SendEvents = p.SendEvents.ValueBoolPointer()
+		perms.VisibleTeamMembers = p.VisibleTeamMembers.ValueBoolPointer()
+	}
+
+	return perms
 }
 
-func flattenAPIKeyPermissions(ctx context.Context, p *v2client.APIKeyPermissions, diags *diag.Diagnostics) types.List {
+func flattenAPIKeyPermissions(ctx context.Context, keyType string, p *v2client.APIKeyPermissions, diags *diag.Diagnostics) types.List {
 	if p == nil {
 		return types.ListNull(types.ObjectType{AttrTypes: models.APIKeyPermissionsAttrType})
 	}
 
+	configOnly := func(v *bool) attr.Value {
+		if keyType == v2client.APIKeyTypeConfiguration {
+			return types.BoolValue(helper.FromPtrOrZero(v))
+		}
+		return types.BoolNull()
+	}
+
 	obj, d := types.ObjectValue(models.APIKeyPermissionsAttrType, map[string]attr.Value{
-		"create_datasets": types.BoolValue(p.CreateDatasets),
+		"create_datasets":      types.BoolValue(p.CreateDatasets),
+		"manage_boards":        configOnly(p.ManageBoards),
+		"manage_columns":       configOnly(p.ManageColumns),
+		"manage_markers":       configOnly(p.ManageMarkers),
+		"manage_recipients":    configOnly(p.ManageRecipients),
+		"manage_slos":          configOnly(p.ManageSLOs),
+		"manage_triggers":      configOnly(p.ManageTriggers),
+		"read_service_maps":    configOnly(p.ReadServiceMaps),
+		"run_queries":          configOnly(p.RunQueries),
+		"send_events":          configOnly(p.SendEvents),
+		"visible_team_members": configOnly(p.VisibleTeamMembers),
 	})
 	diags.Append(d...)
 
